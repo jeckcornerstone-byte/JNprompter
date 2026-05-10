@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JN prompter - Neural Architecture Suite</title>
+  <!-- CDNs for Standalone Deployment -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Load React FIRST -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Load Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Load Core Lucide library -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 10px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 16px;
+      width: 16px;
+      border-radius: 50%;
+      background: #3b82f6;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+    }
+    .image-placeholder {
+      background-image: radial-gradient(circle, #1e293b 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+    @keyframes glow-pulse {
+      0%, 100% { box-shadow: 0 0 5px rgba(59, 130, 246, 0.5), 0 0 10px rgba(59, 130, 246, 0.3); border-color: rgba(59, 130, 246, 0.5); }
+      50% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.8), 0 0 30px rgba(59, 130, 246, 0.4); border-color: rgba(59, 130, 246, 1); }
+    }
+    .launcher-glow {
+      animation: glow-pulse 2s infinite;
+    }
+    .menu-glowing-hover {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .menu-glowing-hover:hover {
+      box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
+      border-color: rgba(96, 165, 250, 0.5);
+      background-color: rgba(30, 41, 59, 0.9);
+      transform: translateY(-1px);
+    }
+    .launcher-item {
+      transition: all 0.2s ease;
+    }
+    .launcher-item:hover {
+      background: rgba(59, 130, 246, 0.1);
+      transform: translateX(4px);
+      box-shadow: -4px 0 0 #3b82f6;
+    }
+    /* Architectural Line Icon Animation */
+    .arch-line {
+      stroke-dasharray: 100;
+      stroke-dashoffset: 100;
+      animation: draw-line 3s ease forwards infinite alternate;
+    }
+    @keyframes draw-line {
+      to { stroke-dashoffset: 0; }
+    }
+    .logo-container:hover .arch-line {
+      filter: drop-shadow(0 0 8px #3b82f6);
+      stroke: #60a5fa;
+    }
+    
+    @media print {
+      body { background: white !important; color: black !important; }
+      header, footer, .no-print { display: none !important; }
+      main { padding: 0 !important; margin: 0 !important; }
+      .print-board { box-shadow: none !important; margin: 0 auto; width: 100% !important; max-width: none !important; }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans selection:bg-blue-500/30 overflow-x-hidden">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+    
+    // --- SYNTHESIZED PLAYSTATION SOUND ENGINE ---
+    const usePSSounds = () => {
+      const audioCtx = useRef(null);
+
+      const playSound = useCallback((freq, type, duration, vol = 0.1) => {
+        try {
+          if (!audioCtx.current) audioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+          const ctx = audioCtx.current;
+          if (ctx.state === 'suspended') ctx.resume();
+          
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+
+          osc.type = type;
+          osc.frequency.setValueAtTime(freq, ctx.currentTime);
+          
+          gain.gain.setValueAtTime(vol, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+
+          osc.start();
+          osc.stop(ctx.currentTime + duration);
+        } catch (e) { /* Audio fails silently if blocked */ }
+      }, []);
+
+      return {
+        nav: () => playSound(800, 'sine', 0.05, 0.05),
+        confirm: () => {
+          playSound(1200, 'sine', 0.1, 0.08);
+          setTimeout(() => playSound(1600, 'sine', 0.1, 0.05), 50);
+        },
+        back: () => {
+          playSound(1000, 'sine', 0.1, 0.08);
+          setTimeout(() => playSound(800, 'sine', 0.1, 0.05), 50);
+        },
+        hover: () => playSound(440, 'triangle', 0.015, 0.02)
+      };
+    };
+
+    const Icon = ({ name, size = 16, className = "" }) => {
+      const containerRef = useRef(null);
+      useEffect(() => {
+        const render = () => {
+          if (containerRef.current && window.lucide) {
+            containerRef.current.innerHTML = '';
+            const iconName = name.charAt(0).toLowerCase() + name.slice(1);
+            const iconData = window.lucide.icons[iconName] || window.lucide.icons.helpCircle;
+            if (iconData) {
+              const svg = window.lucide.createSvg(iconData, {
+                width: size,
+                height: size,
+                class: className,
+                'stroke-width': 2,
+                stroke: 'currentColor',
+                fill: 'none'
+              });
+              containerRef.current.appendChild(svg);
+            }
+          }
+        };
+        if (window.lucide) render();
+        else {
+          const check = setInterval(() => { if (window.lucide) { render(); clearInterval(check); } }, 100);
+          return () => clearInterval(check);
+        }
+      }, [name, size, className]);
+      return <span ref={containerRef} className="inline-flex items-center justify-center pointer-events-none" />;
+    };
+
+    const ArchLogo = ({ stroke = "#3b82f6" }) => (
+      <svg width="44" height="44" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" className="logo-container transition-all cursor-pointer">
+        <path d="M5 35L5 15L20 5L35 15L35 35" stroke={stroke} strokeWidth="1.5" className="arch-line" />
+        <path d="M5 25H35" stroke={stroke} strokeWidth="1" opacity="0.5" className="arch-line" />
+        <path d="M20 5V35" stroke={stroke} strokeWidth="1" opacity="0.5" className="arch-line" />
+        <rect x="16" y="25" width="8" height="10" stroke={stroke} strokeWidth="1.5" className="arch-line" />
+      </svg>
+    );
+
+    const apiKey = ""; 
+
+    const STYLES = {
+      corona: { name: "Corona Renderer", promptSuffix: "Mimic Chaos Corona 11 Engine: Use unbiased path tracing, photorealistic lightmix, soft shadows, 8k raw photography." },
+      unreal: { name: "Unreal Engine 5.4", promptSuffix: "Mimic Unreal Engine 5.4: Use Lumen global illumination, volumetric fog, Ray-traced reflections, cinematography." },
+      midjourney: { name: "Midjourney V6.1", promptSuffix: "Mimic Midjourney V6.1: Highly stylized architectural photography, dramatic cinematic lighting, vibrant color science." },
+      seedream: { name: "Seedream 4.0", promptSuffix: "Mimic Seedream 4.0 Engine: Advanced neural material synthesis, dreamy but hyper-sharp textures, masterpiece visualization." },
+      flux: { name: "Flux Engine Pro", promptSuffix: "Mimic Flux.1 Pro: Extreme structural precision, realistic material imperfections, neutral studio-grade daylight." }
+    };
+
+    const SHOT_TYPES = {
+      perspective: { name: "Perspective View", suffix: "cinematic corner perspective, wide-angle 24mm lens, low-angle ground view, structural volume focus." },
+      front: { name: "Front Elevation", suffix: "direct zero-degree front elevation, 50mm architectural lens, perfectly straight vertical lines, symmetrical facade." },
+      macro: { name: "Macro Material", suffix: "extreme close-up on textures, subsurface scattering, shallow bokeh." },
+      drone: { name: "Drone Shot", suffix: "high-altitude DJI Mavic 3 Pro drone photography, aerial top-down structural perspective, expansive view." },
+      aerial: { name: "Aerial Urban", suffix: "helicopter aerial view, sprawling urban site plan perspective, bird's-eye optics, wide horizon." }
+    };
+
+    const CAMERA_EFFECTS = {
+      default: { name: "None / Sharp", suffix: "sharp focus, clear lens optics throughout." },
+      cinematic: { name: "Cinematic Anamorphic", suffix: "anamorphic lens flares, horizontal light streaks, professional film stock color grading." },
+      dof: { name: "DOF / Bokeh", suffix: "shot with f/1.2 aperture, creamy blurred background, shallow depth of field, razor sharp focal point." },
+      action_blur: { name: "Action / Motion Blur", suffix: "slight motion blur on street elements, dynamic movement speed, long exposure action feel." },
+      tilt_shift: { name: "Tilt-Shift", suffix: "tilt-shift miniature effect, selective focus, toy-town architectural photography aesthetic." },
+      fish_eye: { name: "Fish-Eye", suffix: "ultra-wide fish-eye lens distortion, 8mm circular perspective, curved architectural lines." },
+      infrared: { name: "Infrared", suffix: "infrared architectural photography, surreal white foliage, high-contrast dark skies, thermal roll-off." }
+    };
+
+    const VEHICLES = {
+      default: { name: "No Vehicle", suffix: "" },
+      suv: { name: "Luxury SUV", suffix: "a modern black luxury SUV parked in front of the building entrance." },
+      car: { name: "Modern Sedan", suffix: "a sleek metallic modern sedan car parked nearby in the scene." },
+      medical: { name: "Medical Services", suffix: "an emergency medical services ambulance parked with active lights." },
+      ev: { name: "Electric Sedan", suffix: "a futuristic minimalist electric sedan charging at the curb." },
+      van: { name: "Delivery Van", suffix: "a generic modern white delivery van parked on the side of the road." },
+      construction: { name: "Heavy Machinery", suffix: "a yellow concrete mixer and construction equipment visible at the site." }
+    };
+
+    const COUNTRIES = {
+      default: { name: "No People", suffix: "" },
+      se_asian: { name: "Southeast Asian", suffix: "Southeast Asian people walking in the scene." },
+      european: { name: "European", suffix: "European people walking in the scene." },
+      middle_eastern: { name: "Middle Eastern", suffix: "Middle Eastern people in local attire walking in the scene." },
+      african: { name: "African", suffix: "African people walking in the scene." },
+      east_asian: { name: "East Asian", suffix: "East Asian people walking in the scene." },
+      north_american: { name: "North American", suffix: "North American people walking in the scene." },
+      medical: { name: "Medical Staff", suffix: "medical personnel and healthcare professionals in the scene." },
+      engineering: { name: "Engineers", suffix: "engineers and architects with site plans walking in the scene." },
+      workers: { name: "Construction Workers", suffix: "construction workers in safety gear and hard hats in the scene." },
+      office: { name: "Office Workers", suffix: "business professionals and office workers walking in the scene." },
+      casual: { name: "Casual Crowd", suffix: "people in casual everyday clothing walking in the scene." }
+    };
+
+    const BACKGROUNDS = {
+      default: { name: "Studio Neutral", suffix: "neutral architectural photography studio background." },
+      swiss_alps: { name: "Swiss Alps", suffix: "background featuring Swiss Alps snowy mountains, majestic peaks, alpine landscape." },
+      tokyo: { name: "Tokyo Skyline", suffix: "background featuring Tokyo urban cityscape, dense skyscraper skyline, modern Japanese urbanism." },
+      bali: { name: "Tropical Bali", suffix: "background featuring tropical Bali island jungle, exotic forest, lush coastal environment." },
+      nyc: { name: "New York City", suffix: "background featuring New York Manhattan streets, iconic high-rise buildings, urban concrete jungle." },
+      desert: { name: "Dubai Desert", suffix: "background featuring vast golden Dubai desert sand dunes, arid horizon, extreme heat atmosphere." },
+      london: { name: "London Streets", suffix: "background featuring classic London Victorian architecture, heritage brick buildings, misty atmosphere." },
+      riyadh: { name: "Riyadh Skyline", suffix: "background featuring Riyadh skyline, modern Saudi architectural landmarks, desert metropolis." },
+      dammam: { name: "Dammam", suffix: "background featuring Dammam coastal cityscape, Arabian Gulf waterfront, modern urban elements." },
+      bahrain: { name: "Bahrain", suffix: "background featuring Bahrain skyline, modern island city, World Trade Center reflections." },
+      gcc: { name: "GCC Region", suffix: "background featuring typical GCC regional landscape, modern Khaleeji architecture, palm-lined avenues, arid climate." }
+    };
+
+    const VEGETATION = {
+      default: { name: "Minimal Scape", suffix: "clean architectural landscaping with minimal greenery." },
+      tropical: { name: "Tropical Lush", suffix: "lush tropical vegetation, oversized monsteras, exotic ferns, vibrant palm trees, dense canopy." },
+      desert_plants: { name: "Arid / Desert", suffix: "sparse desert vegetation, saguaro cacti, agave plants, drought-resistant shrubs, rocky soil." },
+      temperate: { name: "Temperate Garden", suffix: "English garden vegetation, manicured hedges, blooming roses, oak trees, soft green lawn." },
+      coniferous: { name: "Pine / Conifer", suffix: "dense coniferous forest vegetation, towering pine trees, cedar needles, dark green mossy floor." },
+      sakura: { name: "Cherry Blossom", suffix: "Japanese sakura vegetation, blooming pink cherry blossom trees, scattered petals, zen garden feel." }
+    };
+
+    const LANDSCAPES = {
+      default: { name: "No Landscape Focus", suffix: "" },
+      softscape: { name: "Softscape", suffix: "rich organic softscape, manicured lawns, lush planting beds, natural soil, abundant greenery." },
+      hardscape: { name: "Hardscape", suffix: "structural hardscape elements, architectural concrete pavers, stone retaining walls, paved pedestrian plazas." },
+      mixed: { name: "Mixed Landscape", suffix: "balanced integration of hardscape paving and organic softscape greenery." }
+    };
+
+    const LIGHT_FIXTURES = {
+      default: { name: "No Fixtures", suffix: "" },
+      street: { name: "Street Light", suffix: "warm street lights illuminating the pavement." },
+      garden: { name: "Garden Light", suffix: "soft low-level garden path lighting." },
+      outdoor: { name: "Outdoor Light", suffix: "bright architectural outdoor wall sconces and spotlights." },
+      interior: { name: "Interior Light", suffix: "visible interior lighting glowing warmly from within." }
+    };
+
+    const ROAD_MARKS = {
+      default: { name: "Clean Asphalt", suffix: "perfectly clean new asphalt road surface." },
+      yellow_lines: { name: "Yellow Lane Marks", suffix: "double yellow lane divider markings on the road surface." },
+      bike_lane: { name: "Bike Lane", suffix: "vivid green dedicated bike lane markings with cyclist icons on the road." },
+      pedestrian: { name: "Zebra Crosswalk", suffix: "vivid white pedestrian crosswalk zebra markings on the asphalt." },
+      arrows: { name: "Directional Arrows", suffix: "white directional traffic arrow markings on the road surface." },
+      bus_lane: { name: "Red Bus Lane", suffix: "vivid red dedicated bus lane marking with BUS lettering." },
+      junction: { name: "Grid Junction", suffix: "yellow box junction grid markings at the architectural corner." }
+    };
+
+    const LIGHT_MODES = {
+      default: { name: "Natural Daylight", suffix: "natural neutral daylight environment lighting." },
+      interior: { name: "Interior Glow", suffix: "warm interior lights glowing through windows, detailed internal lighting, indoor depth." },
+      exterior: { name: "Exterior Facade", suffix: "architectural facade lighting, spotlights illuminating building exterior, landscape lights." },
+      golden_hour: { name: "Golden Hour", suffix: "warm golden hour sunlight, long shadows, soft orange highlight roll-off." },
+      studio: { name: "Studio Lighting", suffix: "professional architectural studio flood lights, perfectly controlled shadows, high-key lighting." },
+      cyberpunk: { name: "Cyberpunk Neon", suffix: "vibrant pink and cyan neon lights reflecting off wet surfaces, futuristic urban night lighting." }
+    };
+
+    const CAMERA_TYPES = {
+      default: { name: "Pro DSLR", suffix: "shot on professional DSLR camera, full-frame CMOS sensor." },
+      mirrorless: { name: "Mirrorless Precision", suffix: "shot on Sony A7R V, mirrorless precision, high dynamic range." },
+      drone_cam: { name: "Drone Lens", suffix: "DJI wide-angle optics, high-altitude clear sensor." },
+      analog: { name: "35mm Film", suffix: "shot on Leica M6, 35mm film camera, analog film aesthetic." }
+    };
+
+    const SEASONS = {
+      default: { name: "Standard", suffix: "neutral clear sky." },
+      spring: { name: "Spring", suffix: "spring morning, soft sunlight, blooming vegetation." },
+      summer: { name: "Summer", suffix: "harsh summer sun, high-contrast shadows, clear sky." },
+      autumn: { name: "Autumn", suffix: "golden hour autumn, warm orange lighting, fallen leaves." },
+      winter: { name: "Winter", suffix: "overcast winter day, realistic heavy snow accumulation." }
+    };
+
+    const AI_SERVICES = [
+      { name: "Google Gemini", url: "https://gemini.google.com/app", desc: "Multimodal image-to-prompt analysis.", icon: "Sparkles", color: "text-blue-400" },
+      { name: "MS Copilot", url: "https://copilot.microsoft.com/", desc: "DALL-E 3 powered with high structural logic.", icon: "Zap", color: "text-indigo-400" },
+      { name: "Bing Create", url: "https://www.bing.com/images/create", desc: "Free high-quality architectural generations.", icon: "ImageIcon", color: "text-cyan-400" },
+      { name: "ChatGPT (DALL-E)", url: "https://chatgpt.com/", desc: "Standard for rapid design prototyping.", icon: "MessageSquare", color: "text-emerald-400" },
+      { name: "Leonardo.ai", url: "https://leonardo.ai/", desc: "Pro material and texture refinement.", icon: "Palette", color: "text-orange-400" },
+      { name: "Krea.ai", url: "https://www.krea.ai/home", desc: "Real-time image enhancement.", icon: "RefreshCw", color: "text-rose-400" }
+    ];
+
+    const App = () => {
+      const ps = usePSSounds();
+      const [activeTab, setActiveTab] = useState('generate');
+      
+      const [selectedImage, setSelectedImage] = useState(null);
+      const [previewUrl, setPreviewUrl] = useState(null);
+      const [prompt, setPrompt] = useState("");
+      const [userSubject, setUserSubject] = useState("");
+      const [seed, setSeed] = useState("");
+      const [isRefining, setIsRefining] = useState(false);
+      const [launcherOpen, setLauncherOpen] = useState(false);
+      
+      const [activeStyle, setActiveStyle] = useState('corona');
+      const [activeShot, setActiveShot] = useState('perspective');
+      const [activeCamera, setActiveCamera] = useState('default');
+      const [activeEffect, setActiveEffect] = useState('default');
+      const [activeSeason, setActiveSeason] = useState('default');
+      const [activeVehicle, setActiveVehicle] = useState('default');
+      const [activeRoad, setActiveRoad] = useState('default');
+      const [activeLight, setActiveLight] = useState('default');
+      const [activeCountry, setActiveCountry] = useState('default');
+      const [activeBackground, setActiveBackground] = useState('default');
+      const [activeVeg, setActiveVegetation] = useState('default');
+      const [activeLandscape, setActiveLandscape] = useState('default');
+      const [activeFixture, setActiveFixture] = useState('default');
+      
+      const [status, setStatus] = useState("");
+
+      // Image Edit States
+      const [editImg1, setEditImg1] = useState(null);
+      const [editUrl1, setEditUrl1] = useState(null);
+      const [editImg2, setEditImg2] = useState(null);
+      const [editUrl2, setEditUrl2] = useState(null);
+      const [editPrompt, setEditPrompt] = useState("");
+      const [editResult, setEditResult] = useState(null);
+      const [isEditing, setIsEditing] = useState(false);
+
+      useEffect(() => {
+        const parts = [
+          userSubject,
+          `${SHOT_TYPES[activeShot].name} perspective`,
+          `Captured on ${CAMERA_TYPES[activeCamera].name}`,
+          activeEffect !== 'default' ? `with ${CAMERA_EFFECTS[activeEffect].name} effect` : '',
+          `${SEASONS[activeSeason].name} Season`,
+          activeCountry !== 'default' ? `featuring ${COUNTRIES[activeCountry].suffix}` : '',
+          activeBackground !== 'default' ? `situated in ${BACKGROUNDS[activeBackground].suffix}` : '',
+          activeLandscape !== 'default' ? `featuring ${LANDSCAPES[activeLandscape].suffix}` : '',
+          activeVeg !== 'default' ? `landscaped with ${VEGETATION[activeVeg].suffix}` : '',
+          activeVehicle !== 'default' ? `${VEHICLES[activeVehicle].suffix}` : '',
+          activeRoad !== 'default' ? `with ${ROAD_MARKS[activeRoad].name} road marks` : '',
+          activeLight !== 'default' ? `${LIGHT_MODES[activeLight].name} focus` : '',
+          activeFixture !== 'default' ? `illuminated by ${LIGHT_FIXTURES[activeFixture].suffix}` : '',
+          `Mimicking ${STYLES[activeStyle].name} engine pipeline`,
+          `STRICT INSTRUCTION: Maintain exact building geometry from reference image, treat reference as strict structural guide, do not alter fundamental architecture`,
+          seed ? `Seed: ${seed}` : ''
+        ].filter(Boolean);
+        setPrompt(parts.join(", "));
+      }, [activeStyle, activeSeason, activeShot, activeCamera, activeEffect, activeVehicle, activeRoad, activeLight, activeCountry, activeBackground, activeVeg, activeLandscape, activeFixture, userSubject, seed]);
+
+      const fetchWithRetry = async (url, options, retries = 5) => {
+        for (let i = 0; i < retries; i++) {
+          try {
+            const response = await fetch(url, options);
+            if (response.ok) return await response.json();
+            const text = await response.text();
+            try {
+              const errData = JSON.parse(text);
+              throw new Error(errData.error?.message || "API Failure");
+            } catch (e) { throw new Error("Invalid API Response"); }
+          } catch (err) {
+            if (i === retries - 1) throw err;
+            await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+          }
+        }
+      };
+
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setSelectedImage(reader.result.split(',')[1]); 
+            setPreviewUrl(reader.result);
+          };
+          reader.readAsDataURL(file);
+        }
+        e.target.value = '';
+      };
+
+      const handleEditUpload1 = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setEditImg1(reader.result.split(',')[1]); 
+            setEditUrl1(reader.result);
+          };
+          reader.readAsDataURL(file);
+        }
+        e.target.value = '';
+      };
+
+      const handleEditUpload2 = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            setEditImg2(reader.result.split(',')[1]); 
+            setEditUrl2(reader.result);
+          };
+          reader.readAsDataURL(file);
+        }
+        e.target.value = '';
+      };
+
+      const generatePrompt = async () => {
+        ps.confirm();
+        if (!selectedImage) { setStatus("Upload model screenshot first!"); return; }
+        setIsRefining(true); setStatus("✨ Generating Prompt: Analyzing Neural Metadata...");
+        try {
+          const systemPrompt = `You are a neural architect. Analyze geometry. Suggest hyper-realistic prompt for ${STYLES[activeStyle].name}. IMPORTANT: Always include strict instructions to maintain the exact building geometry from the reference image. Output ONLY prompt text.`;
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+          
+          const result = await fetchWithRetry(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ 
+                role: "user",
+                parts: [
+                  { text: systemPrompt + " Subject: " + (userSubject || "Modern architecture") },
+                  { inlineData: { mimeType: "image/png", data: selectedImage } }
+                ]
+              }]
+            })
+          });
+          
+          const refined = result.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (refined) { 
+            const newSubject = refined.trim();
+            setUserSubject(newSubject); 
+            
+            const parts = [
+              newSubject,
+              `${SHOT_TYPES[activeShot].name} perspective`,
+              `Captured on ${CAMERA_TYPES[activeCamera].name}`,
+              activeEffect !== 'default' ? `with ${CAMERA_EFFECTS[activeEffect].name} effect` : '',
+              `${SEASONS[activeSeason].name} Season`,
+              activeCountry !== 'default' ? `featuring ${COUNTRIES[activeCountry].suffix}` : '',
+              activeBackground !== 'default' ? `situated in ${BACKGROUNDS[activeBackground].suffix}` : '',
+              activeLandscape !== 'default' ? `featuring ${LANDSCAPES[activeLandscape].suffix}` : '',
+              activeVeg !== 'default' ? `landscaped with ${VEGETATION[activeVeg].suffix}` : '',
+              activeVehicle !== 'default' ? `${VEHICLES[activeVehicle].suffix}` : '',
+              activeRoad !== 'default' ? `with ${ROAD_MARKS[activeRoad].name} road marks` : '',
+              activeLight !== 'default' ? `${LIGHT_MODES[activeLight].name} focus` : '',
+              activeFixture !== 'default' ? `illuminated by ${LIGHT_FIXTURES[activeFixture].suffix}` : '',
+              `Mimicking ${STYLES[activeStyle].name} engine pipeline`,
+              `STRICT INSTRUCTION: Maintain exact building geometry from reference image, treat reference as strict structural guide, do not alter fundamental architecture`,
+              seed ? `Seed: ${seed}` : ''
+            ].filter(Boolean);
+            const newFullPrompt = parts.join(", ");
+            
+            const el = document.createElement('textarea');
+            el.value = newFullPrompt;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+
+            setStatus("✨ Prompt Generated & Copied! Launching AI Hub..."); 
+            setTimeout(() => setLauncherOpen(true), 800);
+          }
+        } catch (error) { setStatus("Calibration failed."); } finally { setIsRefining(false); }
+      };
+
+      const copyOnly = () => {
+        ps.confirm();
+        const el = document.createElement('textarea');
+        el.value = prompt;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        setStatus("✨ Copied to Clipboard! Ready for AI Launcher.");
+        setTimeout(() => setStatus(""), 4000);
+      };
+
+      const copyToLauncher = (url) => {
+        ps.confirm();
+        const el = document.createElement('textarea');
+        el.value = prompt;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+        setStatus("Copied Metadata! Launching Engine...");
+        setTimeout(() => window.open(url, '_blank'), 500);
+      };
+
+      const toggleLauncher = () => {
+        if (!launcherOpen) ps.nav(); else ps.back();
+        setLauncherOpen(!launcherOpen);
+      };
+
+      const runImageEdit = async () => {
+        ps.confirm();
+        if (!editImg1) { setStatus("Upload Image to Edit first!"); return; }
+        if (!editPrompt) { setStatus("Enter modification prompt!"); return; }
+        setIsEditing(true);
+        setStatus("✨ AI Editor modifying image...");
+        try {
+          const parts = [
+            { text: "INSTRUCTION: Modify the primary image based on this prompt: " + editPrompt },
+            { inlineData: { mimeType: "image/png", data: editImg1 } }
+          ];
+          if (editImg2) {
+            parts.push({ text: "Use this secondary image as additional reference/style/element:" });
+            parts.push({ inlineData: { mimeType: "image/png", data: editImg2 } });
+          }
+
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+          const result = await fetchWithRetry(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts }],
+              generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+            })
+          });
+
+          const base64 = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+          if (base64) {
+            const finalImg = `data:image/png;base64,${base64}`;
+            setEditResult(finalImg);
+            setStatus("✨ Image Edit Complete!");
+            setTimeout(() => setStatus(""), 4000);
+          } else {
+            setStatus("Failed to generate image edit.");
+          }
+        } catch (err) {
+          setStatus("Edit failed. Check connection.");
+        } finally {
+          setIsEditing(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-blue-500/30 overflow-x-hidden flex flex-col">
+          <header className="border-b border-white/10 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50 h-24 flex items-center shrink-0">
+            <div className="max-w-6xl mx-auto px-4 w-full flex items-center justify-between">
+              
+              <div className="flex items-center gap-5 group">
+                <div onMouseEnter={ps.hover} onClick={ps.confirm} className="relative transition-transform active:scale-95">
+                  <ArchLogo />
+                  <div className="absolute inset-0 bg-blue-500/20 blur-2xl rounded-full scale-0 group-hover:scale-110 transition-transform duration-700"></div>
+                </div>
+                <div>
+                  <h1 className="text-2xl font-black tracking-tighter uppercase italic leading-none">JN <span className="text-blue-500 underline decoration-blue-500/30 underline-offset-8">prompter</span></h1>
+                  <p className="text-[8px] uppercase tracking-[0.6em] text-slate-500 font-black mt-2">Neural Architecture Suite</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 no-print">
+                <nav className="flex bg-slate-800/50 p-1.5 rounded-2xl border border-white/5 overflow-x-auto custom-scrollbar shadow-inner">
+                  <button onClick={() => {ps.nav(); setActiveTab('generate');}} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'generate' ? 'bg-blue-600 text-white shadow-lg' : 'hover:text-white text-slate-500'}`}>Smart Prompt</button>
+                  <button onClick={() => {ps.nav(); setActiveTab('edit');}} className={`px-5 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'edit' ? 'bg-blue-600 text-white shadow-lg' : 'hover:text-white text-slate-500'}`}>Image Edit</button>
+                </nav>
+
+                <div className="relative">
+                  <button onMouseEnter={ps.hover} onClick={toggleLauncher} className={`flex items-center gap-3 px-6 py-3 rounded-2xl bg-slate-800 border border-white/10 transition-all menu-glowing-hover launcher-glow ${launcherOpen ? 'ring-2 ring-blue-500 bg-slate-700' : ''}`}>
+                    <Icon name="Activity" className="text-blue-400 w-4 h-4" />
+                    <span className="text-[10px] font-black uppercase tracking-[0.3em] hidden md:inline">AI Launcher</span>
+                    <Icon name={launcherOpen ? "ChevronUp" : "ChevronDown"} size={12} className="text-slate-500" />
+                  </button>
+                  {launcherOpen && (
+                    <div className="absolute top-16 right-0 w-80 bg-slate-900 border border-white/10 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden z-[60] animate-in fade-in zoom-in-95 duration-200">
+                      <div className="p-4 border-b border-white/5 bg-slate-800/50 flex items-center justify-between">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic">External Neural Engines</p>
+                        <Icon name="ExternalLink" size={12} className="text-blue-500" />
+                      </div>
+                      <div className="max-h-[400px] overflow-y-auto custom-scrollbar p-3 space-y-1 bg-slate-950/50">
+                        {AI_SERVICES.map((service, idx) => (
+                          <button key={idx} onMouseEnter={ps.hover} onClick={() => copyToLauncher(service.url)} className="w-full text-left p-4 rounded-2xl launcher-item flex items-center gap-4 border border-transparent hover:border-white/5">
+                            <div className={`p-2.5 rounded-xl bg-slate-900 shadow-inner ${service.color}`}><Icon name={service.icon} size={18} /></div>
+                            <div><p className="text-xs font-black text-white uppercase tracking-tight">{service.name}</p><p className="text-[9px] text-slate-500 line-clamp-1">{service.desc}</p></div>
+                          </button>
+                        ))}
+                      </div>
+                      <div className="p-4 bg-blue-600/10 text-center border-t border-white/5">
+                         <p className="text-[9px] font-black text-blue-400 uppercase tracking-[0.2em]">Click to copy & fire engine</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto px-4 py-8 w-full flex-grow">
+            {activeTab === 'generate' && (
+              <div className="space-y-8 animate-in fade-in zoom-in-95 duration-300">
+                <section className="bg-slate-900 border border-white/5 rounded-[2.5rem] p-10 shadow-2xl space-y-10">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div className="md:col-span-2">
+                      <div className="flex items-center gap-3 mb-4">
+                        <Icon name="PenTool" className="w-4 h-4 text-blue-400" />
+                        <label className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] block">Design Subject</label>
+                      </div>
+                      <input onFocus={ps.nav} value={userSubject} onChange={(e) => setUserSubject(e.target.value)} className="w-full bg-slate-950 border border-white/10 rounded-[1.5rem] p-5 text-sm outline-none focus:border-blue-500 transition-all font-medium placeholder:text-slate-800 shadow-inner" placeholder="e.g. brutalist museum, sharp geometry..." />
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <Icon name="Hash" className="w-4 h-4 text-blue-400" />
+                          <label className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] block">Seed</label>
+                        </div>
+                        <button onMouseEnter={ps.hover} onClick={() => { ps.confirm(); setSeed(Math.floor(Math.random() * 999999999).toString()); }} className="text-[9px] text-blue-500 hover:text-blue-400 uppercase font-black tracking-widest flex items-center gap-1 transition-colors">
+                          <Icon name="RefreshCw" size={10} /> Random
+                        </button>
+                      </div>
+                      <input onFocus={ps.nav} value={seed} onChange={(e) => setSeed(e.target.value)} className="w-full bg-slate-950 border border-white/10 rounded-[1.5rem] p-5 text-sm outline-none focus:border-blue-500 transition-all font-medium placeholder:text-slate-800 shadow-inner text-slate-300" placeholder="e.g. 123456789 (Optional)" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                    <div className="space-y-8">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Style Engine</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeStyle} onChange={(e) => setActiveStyle(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(STYLES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Shot Angle</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeShot} onChange={(e) => setActiveShot(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(SHOT_TYPES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Visual Camera Effect</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeEffect} onChange={(e) => setActiveEffect(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(CAMERA_EFFECTS).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Regional Background</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeBackground} onChange={(e) => setActiveBackground(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(BACKGROUNDS).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Vegetation Layer</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeVeg} onChange={(e) => setActiveVegetation(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(VEGETATION).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Landscape Elements</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeLandscape} onChange={(e) => setActiveLandscape(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(LANDSCAPES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-8">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Lighting Calibration</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeLight} onChange={(e) => setActiveLight(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(LIGHT_MODES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Lighting Fixtures</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeFixture} onChange={(e) => setActiveFixture(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(LIGHT_FIXTURES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Population Demo</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeCountry} onChange={(e) => setActiveCountry(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(COUNTRIES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Vehicle Preset</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeVehicle} onChange={(e) => setActiveVehicle(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(VEHICLES).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Civil Road Marking</label>
+                        <select onMouseEnter={ps.hover} onClick={ps.nav} value={activeRoad} onChange={(e) => setActiveRoad(e.target.value)} className="w-full bg-slate-800 border border-white/5 rounded-2xl p-4 outline-none focus:border-blue-500 appearance-none cursor-pointer menu-glowing-hover">
+                          {Object.entries(ROAD_MARKS).map(([k,v]) => <option key={k} value={k}>{v.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase block mb-3 tracking-[0.2em]">Atmosphere Mode</label>
+                        <div className="grid grid-cols-3 gap-2">
+                           {Object.entries(SEASONS).map(([key, s]) => (
+                             <button key={key} onMouseEnter={ps.hover} onClick={() => {ps.nav(); setActiveSeason(key)}} className={`p-3 rounded-xl text-[10px] font-black border transition-all truncate uppercase tracking-tighter ${activeSeason === key ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-slate-800 border-white/5 text-slate-500 hover:text-slate-300'}`}>
+                               {s.name}
+                             </button>
+                           ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-8 border-t border-white/5">
+                    <div className="flex items-center gap-3 mb-6">
+                       <Icon name="Box" className="w-4 h-4 text-blue-400" />
+                       <label className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] block">Geometric Capture</label>
+                    </div>
+                    <div className="relative overflow-hidden rounded-[2.5rem] border border-white/10 bg-slate-950 aspect-video group shadow-inner image-placeholder max-w-4xl mx-auto">
+                      {!previewUrl ? (
+                        <div onMouseEnter={ps.hover} onClick={() => {ps.confirm(); document.getElementById('upl').click()}} className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-blue-500/5 group/upload">
+                          <Icon name="Upload" className="w-16 h-16 text-slate-800 mb-3 group-hover/upload:text-blue-500 transition-colors" />
+                          <span className="text-[11px] text-slate-700 font-black uppercase tracking-[0.4em] group-hover/upload:text-blue-400 transition-colors">Import Viewport</span>
+                        </div>
+                      ) : (
+                        <div className="relative w-full h-full">
+                          <img src={previewUrl} className="w-full h-full object-contain" />
+                          <button onMouseEnter={ps.hover} onClick={() => {ps.back(); setPreviewUrl(null); setSelectedImage(null);}} className="absolute top-6 right-6 p-4 bg-black/60 backdrop-blur-xl rounded-3xl hover:bg-red-600 transition-all shadow-2xl">
+                             <Icon name="Trash2" className="w-5 h-5 text-white" />
+                          </button>
+                        </div>
+                      )}
+                      <input id="upl" type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center mb-5">
+                    <div className="flex items-center gap-3"><Icon name="Terminal" className="w-4 h-4 text-blue-400" /><label className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em]">Master Neural String</label></div>
+                    <div className="flex items-center gap-3">
+                      <button onMouseEnter={ps.hover} onClick={copyOnly} className="text-[10px] flex items-center gap-2 px-5 py-3 bg-indigo-600/10 text-indigo-400 rounded-2xl font-black uppercase tracking-widest transition-all hover:bg-indigo-600 hover:text-white hover:shadow-[0_0_20px_rgba(79,70,229,0.3)]">
+                        <Icon name="Copy" className="w-4 h-4" /> Copy
+                      </button>
+                      <button onMouseEnter={ps.hover} onClick={generatePrompt} disabled={isRefining || !selectedImage} className="text-[10px] flex items-center gap-3 px-6 py-3 bg-blue-600/10 text-blue-400 rounded-2xl disabled:opacity-30 font-black uppercase tracking-widest transition-all hover:bg-blue-600 hover:text-white hover:shadow-[0_0_20px_rgba(59,130,246,0.3)]">
+                        <Icon name="Zap" className="w-4 h-4" /> Generate Prompt
+                      </button>
+                    </div>
+                  </div>
+                  <textarea onMouseEnter={ps.hover} value={prompt} readOnly className="w-full h-48 bg-slate-950 border border-white/5 rounded-[2.5rem] p-10 text-sm font-mono text-blue-400 leading-relaxed shadow-inner outline-none resize-none" />
+                </div>
+              </section>
+            </div>
+            )}
+
+            {activeTab === 'edit' && (
+              <div className="animate-in fade-in zoom-in-95 duration-300">
+                 <section className="bg-slate-900 border border-white/5 rounded-[2.5rem] p-10 shadow-2xl space-y-10">
+                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                      
+                      <div className="space-y-8">
+                        <div>
+                          <h2 className="text-2xl font-black italic uppercase text-white tracking-tighter mb-2">Image <span className="text-indigo-500">Edit</span></h2>
+                          <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-6">Modify and combine references</p>
+                        </div>
+                        
+                        <div>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] block mb-3">Primary Image to Edit</label>
+                          <div className="relative overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950 aspect-video group shadow-inner image-placeholder">
+                            {!editUrl1 ? (
+                              <div onMouseEnter={ps.hover} onClick={() => {ps.confirm(); document.getElementById('edit-up1').click()}} className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-indigo-500/5 group/upload">
+                                <Icon name="Upload" className="w-12 h-12 text-slate-800 mb-3 group-hover/upload:text-indigo-500 transition-colors" />
+                                <span className="text-[9px] text-slate-700 font-black uppercase tracking-[0.3em] group-hover/upload:text-indigo-400 transition-colors">Upload Base</span>
+                              </div>
+                            ) : (
+                              <div className="relative w-full h-full">
+                                <img src={editUrl1} className="w-full h-full object-contain" />
+                                <button onMouseEnter={ps.hover} onClick={() => {ps.back(); setEditUrl1(null); setEditImg1(null);}} className="absolute top-4 right-4 p-3 bg-black/60 backdrop-blur-xl rounded-2xl hover:bg-red-600 transition-all shadow-2xl">
+                                   <Icon name="Trash2" className="w-4 h-4 text-white" />
+                                </button>
+                              </div>
+                            )}
+                            <input id="edit-up1" type="file" className="hidden" accept="image/*" onChange={handleEditUpload1} />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] block mb-3">Secondary Image (Optional Element)</label>
+                          <div className="relative overflow-hidden rounded-[1.5rem] border border-white/10 bg-slate-950 aspect-video group shadow-inner image-placeholder">
+                            {!editUrl2 ? (
+                              <div onMouseEnter={ps.hover} onClick={() => {ps.confirm(); document.getElementById('edit-up2').click()}} className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer transition-all hover:bg-emerald-500/5 group/upload">
+                                <Icon name="ImagePlus" className="w-12 h-12 text-slate-800 mb-3 group-hover/upload:text-emerald-500 transition-colors" />
+                                <span className="text-[9px] text-slate-700 font-black uppercase tracking-[0.3em] group-hover/upload:text-emerald-400 transition-colors">Upload Reference</span>
+                              </div>
+                            ) : (
+                              <div className="relative w-full h-full">
+                                <img src={editUrl2} className="w-full h-full object-contain" />
+                                <button onMouseEnter={ps.hover} onClick={() => {ps.back(); setEditUrl2(null); setEditImg2(null);}} className="absolute top-4 right-4 p-3 bg-black/60 backdrop-blur-xl rounded-2xl hover:bg-red-600 transition-all shadow-2xl">
+                                   <Icon name="Trash2" className="w-4 h-4 text-white" />
+                                </button>
+                              </div>
+                            )}
+                            <input id="edit-up2" type="file" className="hidden" accept="image/*" onChange={handleEditUpload2} />
+                          </div>
+                        </div>
+
+                        <div>
+                           <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] block mb-3">Modification Instructions</label>
+                           <textarea onMouseEnter={ps.hover} value={editPrompt} onChange={(e) => setEditPrompt(e.target.value)} placeholder="e.g. Change the building facade to brick, add modern windows..." className="w-full h-32 bg-slate-950 border border-white/10 rounded-[1.5rem] p-5 text-sm outline-none focus:border-indigo-500 transition-all font-medium placeholder:text-slate-800 shadow-inner resize-none" />
+                        </div>
+
+                        <button 
+                          onMouseEnter={ps.hover}
+                          onClick={runImageEdit}
+                          disabled={isEditing || !editImg1}
+                          className="w-full text-[10px] flex items-center justify-center gap-3 px-6 py-5 bg-indigo-600/10 text-indigo-400 rounded-2xl disabled:opacity-30 font-black uppercase tracking-widest transition-all hover:bg-indigo-600 hover:text-white hover:shadow-[0_0_20px_rgba(79,70,229,0.3)]"
+                        >
+                          {isEditing ? <Icon name="RefreshCw" className="w-4 h-4 animate-spin" /> : <Icon name="Wand2" className="w-4 h-4" />}
+                          {isEditing ? 'Processing Edit...' : 'Run Neural Edit'}
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col">
+                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] block mb-3">Modified Output</label>
+                         <div className="flex-grow rounded-[2rem] border-2 border-white/5 bg-slate-950 flex items-center justify-center overflow-hidden relative shadow-inner p-4 min-h-[400px]">
+                            {editResult ? (
+                              <div className="w-full h-full relative group">
+                                <img src={editResult} className="w-full h-full object-contain rounded-xl" />
+                                <button onMouseEnter={ps.hover} onClick={() => { const link = document.createElement('a'); link.href = editResult; link.download = `edit-${Date.now()}.png`; link.click(); }} className="absolute bottom-4 right-4 p-4 bg-indigo-600 rounded-2xl hover:bg-indigo-500 transition-all shadow-2xl opacity-0 group-hover:opacity-100">
+                                   <Icon name="Download" className="w-5 h-5 text-white" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="opacity-10 text-center select-none flex flex-col items-center">
+                                <Icon name="Image" size={64} className="mb-4" />
+                                <span className="text-[10px] font-black uppercase tracking-[0.4em]">Result Standby</span>
+                              </div>
+                            )}
+                         </div>
+                      </div>
+
+                   </div>
+                 </section>
+              </div>
+            )}
+
+            {status && (
+              <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-blue-600/90 backdrop-blur-md border border-blue-400/30 px-6 py-4 rounded-[2rem] flex items-center gap-4 animate-in fade-in slide-in-from-bottom-8 shadow-2xl z-50">
+                <Icon name="Activity" className="w-5 h-5 text-white shrink-0" /><p className="text-[11px] text-white font-black uppercase tracking-[0.2em] italic">{String(status)}</p>
+              </div>
+            )}
+          </main>
+
+          <footer className="border-t border-white/5 py-12 mt-auto text-center opacity-30 shrink-0 no-print">
+             <p className="text-[10px] uppercase tracking-[1em] font-black text-slate-600">JN prompter v4.3 // Neural Archi-Metadata // Developed by Jeck</p>
+          </footer>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
